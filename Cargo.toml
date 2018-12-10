@@ -8,3 +8,7 @@ kstat = "0.1"
 zonename = {git = "https://github.com/bahamas10/rust-zonename.git"}
 float-cmp = "0.4"
 clap = "2.32"
+
+[[bin]]
+path = "src/main.rs"
+name = "vfsstat"

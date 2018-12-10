@@ -62,12 +62,12 @@ struct Stats {
 
 static NANOSEC: f64 = 1_000_000_000.0;
 
-// Consume VfsData and return it back as 'instance_id: KstatData'
+/// Consume VfsData and return it back as 'instance_id: KstatData'
 fn zone_hashmap(data: VfsData) -> ZoneHash {
     data.into_iter().map(|i| (i.instance, i)).collect()
 }
 
-// Read a String value from a kstat or panic
+/// Read a String value from a kstat or panic
 fn read_string(data: &KstatNamedData) -> &String {
     match data {
         KstatNamedData::DataString(val) => val,
@@ -75,7 +75,7 @@ fn read_string(data: &KstatNamedData) -> &String {
     }
 }
 
-// Read a u64 value from a kstat or panic
+/// Read a u64 value from a kstat or panic
 fn read_u64(data: &KstatNamedData) -> u64 {
     match data {
         KstatNamedData::DataUInt64(val) => *val,
@@ -83,34 +83,30 @@ fn read_u64(data: &KstatNamedData) -> u64 {
     }
 }
 
-// Get the stats we care about from the KstatData
+/// Get the stats we care about from the KstatData
 fn get_stats(data: &HashMap<String, KstatNamedData>) -> Stats {
-    let delay_cnt = read_u64(&data["delay_cnt"]) as f64;
-    let delay_time = read_u64(&data["delay_time"]) as f64;
-    let reads = read_u64(&data["reads"]) as f64;
-    let writes = read_u64(&data["writes"]) as f64;
-    let nread = read_u64(&data["nread"]) as f64;
-    let nwritten = read_u64(&data["nwritten"]) as f64;
-    let rtime = read_u64(&data["rtime"]) as f64;
-    let wtime = read_u64(&data["wtime"]) as f64;
-    let rlentime = read_u64(&data["rlentime"]) as f64;
-    let wlentime = read_u64(&data["wlentime"]) as f64;
-
     Stats {
-        delay_cnt,
-        delay_time,
-        reads,
-        writes,
-        nread,
-        nwritten,
-        rtime,
-        wtime,
-        rlentime,
-        wlentime,
+        delay_cnt: read_u64(&data["delay_cnt"]) as f64,
+        delay_time: read_u64(&data["delay_time"]) as f64,
+        reads: read_u64(&data["reads"]) as f64,
+        writes: read_u64(&data["writes"]) as f64,
+        nread: read_u64(&data["nread"]) as f64,
+        nwritten: read_u64(&data["nwritten"]) as f64,
+        rtime: read_u64(&data["rtime"]) as f64,
+        wtime: read_u64(&data["wtime"]) as f64,
+        rlentime: read_u64(&data["rlentime"]) as f64,
+        wlentime: read_u64(&data["wlentime"]) as f64,
     }
 }
 
-// Loop over each VfsData and output VFS read/write ops in a meaningful way
+/// Loop over each VfsData and output VFS read/write ops in a meaningful way
+///
+/// * `curr` - Current ZoneHash kstat reading
+/// * `old` - Optional previous ZoneHash kstat reading
+/// * `id` - Current zone's zoneid
+/// * `mb` - Print in MB/s instead of KB/s
+/// * `activity` - Hide zone's with no activity
+/// * `all` - Show all zones instead of just the current
 fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activity: bool,
     all: bool) {
     let mut keys: Vec<_> = curr.keys().collect();
@@ -134,7 +130,7 @@ fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activ
         if old.is_some() && !old.as_ref().unwrap().contains_key(instance) { continue; };
 
         let old_snaptime = old.as_ref().map_or(0, |s| s[instance].snaptime);
-        let etime = match old_snaptime{
+        let etime = match old_snaptime {
             val if val > 0 => stat.snaptime - old_snaptime,
             _ => stat.snaptime - stat.crtime,
         } as f64 / NANOSEC;
@@ -303,6 +299,7 @@ fn main() {
         let stats = reader.read().expect("failed to read kstats");
         let curr = zone_hashmap(stats);
 
+        // reprint the header every 20 iterations
         if header_interval > 20 {
             print_header(hide_header);
             header_interval = 0;
