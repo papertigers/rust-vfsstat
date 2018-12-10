@@ -42,7 +42,6 @@ fn print_header(hide: bool) {
         "%r",  "%w", "d/s", "del_t", "zone");
 }
 
-static NANOSEC: f64 = 1_000_000_000.0;
 
 type VfsData = Vec<KstatData>;
 type ZoneHash = HashMap<i32, KstatData>;
@@ -60,6 +59,8 @@ struct Stats {
     rlentime: f64,
     wlentime: f64,
 }
+
+static NANOSEC: f64 = 1_000_000_000.0;
 
 // Consume VfsData and return it back as 'instance_id: KstatData'
 fn zone_hashmap(data: VfsData) -> ZoneHash {
@@ -110,7 +111,8 @@ fn get_stats(data: &HashMap<String, KstatNamedData>) -> Stats {
 }
 
 // Loop over each VfsData and output VFS read/write ops in a meaningful way
-fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, activity: bool, all: bool) {
+fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activity: bool,
+    all: bool) {
     let mut keys: Vec<_> = curr.keys().collect();
     keys.sort();
 
@@ -139,7 +141,7 @@ fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, activity: bool,
 
         // TODO: Implement "-I" and set the value here if needed
         let divisor = etime;
-        let bytes = 1024.0;
+        let bytes = if mb { 1024.0 * 1024.0 } else { 1024.0 };
 
         /*
          * These calculations are transcribed from the perl version of `vfsstat` which was
@@ -221,6 +223,19 @@ fn main() {
 
        This version is a port of the original vfsstat written by Brendan
        Gregg.
+
+       r/s: reads per second
+       w/s: writes per second
+       kr/s: kilobytes read per second
+       kw/s: kilobytes written per second
+       ractv: average number of read operations actively being serviced by the VFS layer
+       wactv: average number of write operations actively being serviced by the VFS layer
+       read_t: average VFS read latency, in microseconds
+       writ_t: average VFS write latency, in microseconds
+       %r: percent of time there is a VFS read operation pending
+       %w: percent of time there is a VFS write operation pending
+       d/s: VFS operations per second delayed by the ZFS I/O throttle
+       del_t: average ZFS I/O throttle delay, in microseconds
         "#;
     let matches = App::new("vfsstat")
         .version("0.1.0")
@@ -236,6 +251,9 @@ fn main() {
         .arg(Arg::with_name("Z")
             .short("Z")
             .help("Print results for all zones, not just the current zone"))
+        .arg(Arg::with_name("M")
+            .short("M")
+            .help("Print results in MB/s instead of KB/s"))
         .arg(Arg::with_name("INTERVAL")
             .help("Print results per inverval rather than per second")
             .index(1))
@@ -246,6 +264,7 @@ fn main() {
         .get_matches();
 
     let hide_header = matches.is_present("H");
+    let use_mb = matches.is_present("M");
     let show_all_zones = matches.is_present("Z");
     let hide_no_activity = matches.is_present("z");
 
@@ -288,18 +307,16 @@ fn main() {
             print_header(hide_header);
             header_interval = 0;
         }
-        print_stats(&curr, &old, zoneid, hide_no_activity, show_all_zones);
+        print_stats(&curr, &old, zoneid, use_mb, hide_no_activity, show_all_zones);
         let _ = ::std::io::stderr().flush();
 
         // move curr -> old
         old = Some(curr);
         header_interval += 1;
+
         if count.is_some() {
             nloops += 1;
-        }
-
-        if count.is_some() && nloops >= *count.as_ref().unwrap() {
-            break;
+            if nloops >= *count.as_ref().unwrap() { break; }
         }
         thread::sleep(time::Duration::from_secs(interval as u64));
     }
