@@ -1,0 +1,10 @@
+[package]
+name = "vfsstat"
+version = "0.1.0"
+authors = ["Mike Zeller <mike@mikezeller.net>"]
+
+[dependencies]
+kstat = "0.1"
+zonename = {git = "https://github.com/bahamas10/rust-zonename.git"}
+float-cmp = "0.4"
+clap = "2.32"
