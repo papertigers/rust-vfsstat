@@ -7,9 +7,11 @@ edition = "2018"
 [dependencies]
 kstat = "0.1"
 zonename = "0.1"
-float-cmp = "0.4"
 clap = "2.32"
 
 [[bin]]
 path = "src/main.rs"
 name = "vfsstat"
+
+[profile.release]
+lto = true
