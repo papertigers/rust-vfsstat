@@ -1,10 +1,4 @@
-extern crate clap;
-extern crate float_cmp;
-extern crate kstat;
-extern crate zonename;
-
-use clap::{Arg, App};
-use float_cmp::ApproxEq;
+use clap::{Arg, App, crate_authors, crate_version};
 use kstat::kstat_named::KstatNamedData;
 use kstat::{KstatData, KstatReader};
 use std::collections::HashMap;
@@ -22,15 +16,15 @@ macro_rules! output_fmt {
 
 macro_rules! write_header(
     ($($arg:tt)*) => { {
-        let r = writeln!(&mut ::std::io::stderr(), header_fmt!(), $($arg)*);
-        r.expect("failed printing to stderr");
+        let r = writeln!(&mut ::std::io::stdout(), header_fmt!(), $($arg)*);
+        r.expect("failed printing to stdout");
     } }
 );
 
 macro_rules! write_output(
     ($($arg:tt)*) => { {
-        let r = writeln!(&mut ::std::io::stderr(), output_fmt!(), $($arg)*);
-        r.expect("failed printing to stderr");
+        let r = writeln!(&mut ::std::io::stdout(), output_fmt!(), $($arg)*);
+        r.expect("failed printing to stdout");
     } }
 );
 
@@ -61,6 +55,11 @@ struct Stats {
 }
 
 static NANOSEC: f64 = 1_000_000_000.0;
+
+enum Scale {
+    KB,
+    MB,
+}
 
 /// Consume VfsData and return it back as 'instance_id: KstatData'
 fn zone_hashmap(data: VfsData) -> ZoneHash {
@@ -104,10 +103,10 @@ fn get_stats(data: &HashMap<String, KstatNamedData>) -> Stats {
 /// * `curr` - Current ZoneHash kstat reading
 /// * `old` - Optional previous ZoneHash kstat reading
 /// * `id` - Current zone's zoneid
-/// * `mb` - Print in MB/s instead of KB/s
+/// * `scale` - Print in MB/s or KB/s
 /// * `activity` - Hide zone's with no activity
 /// * `all` - Show all zones instead of just the current
-fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activity: bool,
+fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, scale: &Scale, activity: bool,
     all: bool) {
     let mut keys: Vec<_> = curr.keys().collect();
     keys.sort();
@@ -137,16 +136,34 @@ fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activ
 
         // TODO: Implement "-I" and set the value here if needed
         let divisor = etime;
-        let bytes = if mb { 1024.0 * 1024.0 } else { 1024.0 };
+        let bytes = match scale {
+            Scale::KB => 1024.0,
+            Scale::MB =>  1024.0 * 1024.0,
+        };
 
         /*
          * These calculations are transcribed from the perl version of `vfsstat` which was
          * originally written by Brendan Gregg
          */
-        let reads = (stats.reads - old_stats.reads) / divisor;
-        let writes = (stats.writes - old_stats.writes) / divisor;
-        let nread = (stats.nread - old_stats.nread) / divisor / bytes;
-        let nwritten = (stats.nwritten - old_stats.nwritten) / divisor / bytes;
+        let reads = stats.reads - old_stats.reads;
+        let writes = stats.writes - old_stats.writes;
+        let nread = stats.nread - old_stats.nread;
+        let nwritten = stats.nwritten - old_stats.nwritten;
+
+        fn cmp(v: f64) -> bool {
+            v == 0.0
+        }
+
+        // break out of the loop early if we know the user wants to skip zones with no activity
+        if activity && cmp(reads) && cmp(writes) && cmp(nread) && cmp(nwritten) {
+            continue;
+        }
+
+
+        let reads = reads / divisor;
+        let writes = writes / divisor;
+        let nread = nread / divisor / bytes;
+        let nwritten = nwritten / divisor / bytes;
 
         let r_tps = (stats.reads - old_stats.reads) / etime;
         let w_tps = (stats.writes - old_stats.writes) / etime;
@@ -164,16 +181,8 @@ fn print_stats(curr: &ZoneHash, old: &Option<ZoneHash>, id: i32, mb: bool, activ
         let r_b_pct = (((stats.rtime - old_stats.rtime) / NANOSEC) / etime) * 100.0;
         let w_b_pct = (((stats.wtime - old_stats.wtime) / NANOSEC) / etime) * 100.0;
 
-        // compare two float values to 1 unit of precision (ulp)
-        fn fc(a: f64, b: f64) -> bool {
-            a.approx_eq(&b, ::std::f64::EPSILON, 1)
-        }
-
-        if !activity || !fc(reads, 0.0) || !fc(writes, 0.0) || !fc(nread, 0.0) ||
-            !fc(nwritten, 0.0) {
-            write_output!(reads, writes, nread, nwritten, r_actv, w_actv, read_t, write_t, r_b_pct,
-                w_b_pct, d_tps, del_t, zonename, instance);
-        }
+        write_output!(reads, writes, nread, nwritten, r_actv, w_actv, read_t, write_t, r_b_pct,
+            w_b_pct, d_tps, del_t, zonename, instance);
     }
 }
 
@@ -182,43 +191,6 @@ fn main() {
        The vfsstat utility reports a summary of VFS read and write activity
        per zone.  It first prints all activity since boot, then reports
        activity over a specified interval.
-
-       When run from a non-global zone (NGZ), only activity from that NGZ can
-       be observed.  When run from a the global zone (GZ), activity from the
-       GZ and all other NGZs can be observed.
-
-       This tool is convenient for examining I/O performance as experienced by
-       a particular zone or application.  Other tools which examine solely
-       disk I/O do not report reads and writes which may use the filesystem's
-       cache.  Since all read and write system calls pass through the VFS
-       layer, even those which are satisfied by the filesystem cache, this
-       tool is a useful starting point when looking at a potential I/O
-       performance problem.  The vfsstat command reports the most accurate
-       reading of I/O performance as experienced by an application or zone.
-
-       One additional feature is that ZFS zvol performance is also reported by
-       this tool, even though zvol I/O does not go through the VFS layer. This
-       is done so that this single tool can be used to monitor I/O performance
-       and because its not unreasonable to think of zvols as being included
-       along with other ZFS filesystems.
-
-       The calculations and output fields emulate those from iostat(1m) as
-       closely as possible.  When only one zone is actively performing disk
-       I/O, the results from iostat(1m) in the global zone and vfsstat in the
-       local zone should be almost identical.  Note that many VFS read
-       operations may be handled by the filesystem cache, so vfsstat and
-       iostat(1m) will be similar only when most operations require a disk
-       access.
-
-       As with iostat(1m), a result of 100% for VFS read and write utilization
-       does not mean that the VFS layer is fully saturated.  Instead, that
-       measurement just shows that at least one operation was pending over the
-       last interval of time examined.  Since the VFS layer can process more
-       than one operation concurrently, this measurement will frequently be
-       100% but the VFS layer can still accept additional requests.
-
-       This version is a port of the original vfsstat written by Brendan
-       Gregg.
 
        r/s: reads per second
        w/s: writes per second
@@ -234,8 +206,8 @@ fn main() {
        del_t: average ZFS I/O throttle delay, in microseconds
         "#;
     let matches = App::new("vfsstat")
-        .version("0.1.0")
-        .author("Mike Zeller <mike@mikezeller.net")
+        .version(crate_version!())
+        .author(crate_authors!("\n"))
         .about("Report VFS read and write activity")
         .long_about(about)
         .arg(Arg::with_name("H")
@@ -260,7 +232,7 @@ fn main() {
         .get_matches();
 
     let hide_header = matches.is_present("H");
-    let use_mb = matches.is_present("M");
+    let scale = if matches.is_present("M") { Scale::MB } else { Scale::KB };
     let show_all_zones = matches.is_present("Z");
     let hide_no_activity = matches.is_present("z");
 
@@ -304,7 +276,7 @@ fn main() {
             print_header(hide_header);
             header_interval = 0;
         }
-        print_stats(&curr, &old, zoneid, use_mb, hide_no_activity, show_all_zones);
+        print_stats(&curr, &old, zoneid, &scale, hide_no_activity, show_all_zones);
         let _ = ::std::io::stderr().flush();
 
         // move curr -> old
