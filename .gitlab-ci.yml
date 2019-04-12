@@ -1,0 +1,8 @@
+stages:
+  - build
+
+rust-latest:
+  stage: build
+  script:
+    - cargo build --verbose
+    - cargo test --verbose
